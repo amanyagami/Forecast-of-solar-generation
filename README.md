@@ -1,4 +1,4 @@
-# project-1
+# project-1 (In Matlab)
 forecast generation of solar induction on clear and cloudy day
 this project uses solar irradiation and generation data of one year taken at every 15 minute interval.
 
@@ -13,4 +13,5 @@ creating further datasets from these by picking every 2nd, 3rd and 4th point. th
  
 then using a lstm model we can feed the data and train the model and predict the  forecast of solar generation at every 15min,30min,45min,60min on a clear and cloudy day.
 
+i am enclosing the datasets along with my code in matlab
 
