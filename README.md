@@ -81,7 +81,7 @@ We have a total of 8 forcasts 15,30,45 and 60 mins for 2 days of clear and cloud
 We are going to consider Forecast of Cloudy day at every 45 min interaval here.
 The LSTM model is trained of 75% of the data and uses root-mean-square error(RMSE) for the training progress
 
-![](t.jpg)
+![](t1.jpg)
 
 
 <br>
@@ -99,7 +99,7 @@ The network state is initialized and reset . Resetting the network state prevent
 The resultant forecast is more accurate .
  
 
-![](v.jpg)
+![](v1.jpg)
 
 
 <br>
