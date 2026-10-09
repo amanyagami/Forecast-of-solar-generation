@@ -1,0 +1,45 @@
+[project]
+name = "solarcast"
+version = "0.1.0"
+description = "Reproducible solar-generation forecasting baselines and models (NITK Surathkal, 15-minute data)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "openpyxl>=3.1",
+    "scikit-learn>=1.4",
+    "lightgbm>=4.7",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+deep = ["torch>=2.2"]
+foundation = ["chronos-forecasting>=1.4"]
+
+[project.scripts]
+solarcast = "solarcast.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "D"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
