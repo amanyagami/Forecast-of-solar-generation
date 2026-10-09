@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install (core dependencies only)
+        run: uv sync --frozen --python ${{ matrix.python-version }}
+      - name: Ruff format check
+        run: uv run --frozen ruff format --check src/ tests/
+      - name: Ruff lint
+        run: uv run --frozen ruff check src/ tests/
+      - name: Tests
+        run: uv run --frozen pytest -q
