@@ -1,156 +1,196 @@
-# Forecast of solar generation (NITK Surathkal)
+<div align="center">
 
-Short-term (15 / 30 / 45 / 60 minute) forecasting of PV generation from one year of 15-minute
-data, rebuilt as a reproducible Python package (`solarcast`) with honest baselines. The original
-MATLAB LSTM project is preserved in `matlab/code.m` and described at the bottom of this file.
+# solarcast
 
-## The data
+**Honest short-term solar generation forecasting for NITK Surathkal, with baselines that actually have to be beaten.**
 
-Two Excel workbooks sit in the repo root: `Generation data.xlsx` (header "Main Building - Energy
-Meter Export (kWh)") and `Irradiation data.xlsx` ("Sensor - Irradiance (with coeff)", labelled
-Wh/m2 but with peak values around 1000-1350 it behaves like W/m2). What is really in them:
+[![CI](https://github.com/amanyagami/Forecast-of-solar-generation/actions/workflows/ci.yml/badge.svg)](https://github.com/amanyagami/Forecast-of-solar-generation/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![uv](https://img.shields.io/badge/packaged%20with-uv-6c47ff.svg)](https://docs.astral.sh/uv/)
 
-* **Layout**: each sheet is 12 side-by-side `(Date, value)` column pairs, one per month,
-  covering 2018-12-01 to 2019-12-01 on a 15-minute grid (35,040 slots).
-* **Timestamps are corrupted by Excel**: days 1-12 of every month were parsed as `mm/dd`
-  (day and month swapped, e.g. 1 Nov 2019 is stored as 11 Jan 2019) while days 13-31 are plain
-  `dd/mm/yyyy` text. `solarcast.data` swaps them back; after that every stamp lies on the 15-minute grid with no
-  duplicates (the raw sheets have 434 missing generation slots and 7 missing irradiation slots,
-  which become NaN on the regular grid).
-* **Generation spikes**: 258 readings (0.75%) are paired `-X, +X` values of about 500,000 (a
-  cumulative meter register leaking in; e.g. 2018-12-01 08:15/08:30). Genuine values lie in
-  0-30.6 kWh per 15 minutes. The MATLAB code hid this with `TestIp>50 = 30`. Spikes are set to NaN.
-* **Missing data**: generation lacks 00:00-05:15 on the first day of each month (night, filled with
-  0 only where irradiation confirms darkness) and all of 2019-08-28/29 (outage; irradiation is
-  also NaN there). After cleaning: 1.2% of generation and 1.3% of irradiation values are NaN.
-* **Alignment**: the two sheets are offset by 21 rows in the raw files (generation starts at
-  05:30, irradiation at 00:15) -- this is why the MATLAB code slices rows `76:459` against
-  `97:480` by hand. Matching on timestamps removes the need for that. Correlation of generation
-  with irradiation is highest when irradiation is taken one step (15 min) later (0.957 vs 0.955
-  at lag 0), i.e. the irradiation stamp looks like an interval-end label; the effect is small and
-  not corrected.
+<img src="results/rmse_by_horizon.png" alt="RMSE by forecast horizon on clear and cloudy days (holdout)" width="860">
 
-## How to run
+<sub>Holdout RMSE (kWh per 15 min, daylight steps) vs horizon. Lower is better.</sub>
+
+</div>
+
+One year of 15-minute generation and irradiation data, forecast 15 / 30 / 45 / 60 minutes ahead.
+The original MATLAB LSTM project (kept in [`matlab/code.m`](matlab/code.m), write-up at the bottom)
+had no baseline; this repo adds persistence, smart persistence and seasonal-naive references,
+leak-free chronological and rolling-origin evaluation, LightGBM, and a small LSTM.
+
+## Headline results
+
+Holdout test period 2019-09-19 to 2019-12-01. RMSE in kWh per 15 min; skill vs persistence in
+brackets (positive = better than persistence).
+
+| Model | clear 15 min | clear 60 min | cloudy 15 min | cloudy 60 min |
+|---|---|---|---|---|
+| Persistence | 2.271 | 5.644 | 3.085 | 5.996 |
+| Smart persistence | 1.968 (+0.13) | 2.920 (+0.48) | 2.999 (+0.03) | 4.943 (+0.18) |
+| Seasonal naive | 4.485 (-0.98) | 4.491 (+0.20) | 6.919 (-1.24) | 6.922 (-0.15) |
+| LightGBM | 1.914 (+0.16) | 2.879 (+0.49) | 2.826 (+0.08) | 4.757 (+0.21) |
+| LSTM | 1.946 (+0.14) | 2.721 (+0.52) | 2.889 (+0.06) | 4.775 (+0.20) |
+
+| Takeaway | Evidence |
+|---|---|
+| Learned models beat persistence only modestly at 15 min | skill +0.06 to +0.16 |
+| The gain grows with horizon | skill +0.20 to +0.52 at 60 min |
+| Smart persistence gets most of the clear-day gain | within a few percent of the learned models at 30-60 min on clear days |
+| LightGBM vs LSTM is close to a tie | LightGBM ahead on cloudy days, LSTM on clear days from 30 min; one seed, no significance test |
+| Cloudy days stay hard | skill never exceeds +0.21 for any model |
+
+<details>
+<summary>Full tables (holdout and rolling origin, all horizons and regimes)</summary>
+
+**Holdout, clear days** (n = 1927 daylight steps per horizon)
+
+| Model | clear 15 min | clear 30 min | clear 45 min | clear 60 min |
+|---|---|---|---|---|
+| Persistence | 2.271 | 3.446 | 4.534 | 5.644 |
+| Smart persistence | 1.968 (+0.13) | 2.443 (+0.29) | 2.672 (+0.41) | 2.920 (+0.48) |
+| Seasonal naive | 4.485 (-0.98) | 4.487 (-0.30) | 4.488 (+0.01) | 4.491 (+0.20) |
+| LightGBM | 1.914 (+0.16) | 2.453 (+0.29) | 2.837 (+0.37) | 2.879 (+0.49) |
+| LSTM | 1.946 (+0.14) | 2.254 (+0.35) | 2.457 (+0.46) | 2.721 (+0.52) |
+
+**Holdout, cloudy days** (n = 1168 daylight steps per horizon)
+
+| Model | cloudy 15 min | cloudy 30 min | cloudy 45 min | cloudy 60 min |
+|---|---|---|---|---|
+| Persistence | 3.085 | 4.247 | 5.186 | 5.996 |
+| Smart persistence | 2.999 (+0.03) | 3.911 (+0.08) | 4.519 (+0.13) | 4.943 (+0.18) |
+| Seasonal naive | 6.919 (-1.24) | 6.924 (-0.63) | 6.932 (-0.34) | 6.922 (-0.15) |
+| LightGBM | 2.826 (+0.08) | 3.677 (+0.13) | 4.241 (+0.18) | 4.757 (+0.21) |
+| LSTM | 2.889 (+0.06) | 3.815 (+0.10) | 4.393 (+0.15) | 4.775 (+0.20) |
+
+**Holdout, all days** (n = 3131 daylight steps per horizon)
+
+| Model | all 15 min | all 30 min | all 45 min | all 60 min |
+|---|---|---|---|---|
+| Persistence | 2.611 | 3.773 | 4.800 | 5.791 |
+| Smart persistence | 2.414 (+0.08) | 3.089 (+0.18) | 3.500 (+0.27) | 3.832 (+0.34) |
+| Seasonal naive | 5.525 (-1.12) | 5.525 (-0.46) | 5.532 (-0.15) | 5.532 (+0.04) |
+| LightGBM | 2.307 (+0.12) | 2.981 (+0.21) | 3.443 (+0.28) | 3.709 (+0.36) |
+| LSTM | 2.350 (+0.10) | 2.950 (+0.22) | 3.334 (+0.31) | 3.650 (+0.37) |
+
+**Rolling, clear days** (n = 2016 daylight steps per horizon)
+
+| Model | clear 15 min | clear 30 min | clear 45 min | clear 60 min |
+|---|---|---|---|---|
+| Persistence | 2.314 | 3.482 | 4.574 | 5.669 |
+| Smart persistence | 2.054 (+0.11) | 2.534 (+0.27) | 2.791 (+0.39) | 3.034 (+0.46) |
+| Seasonal naive | 4.809 (-1.08) | 4.812 (-0.38) | 4.813 (-0.05) | 4.816 (+0.15) |
+| LightGBM | 1.982 (+0.14) | 2.485 (+0.29) | 2.788 (+0.39) | 2.920 (+0.48) |
+| LSTM | 1.901 (+0.18) | 2.235 (+0.36) | 2.510 (+0.45) | 2.707 (+0.52) |
+
+**Rolling, cloudy days** (n = 2965 daylight steps per horizon)
+
+| Model | cloudy 15 min | cloudy 30 min | cloudy 45 min | cloudy 60 min |
+|---|---|---|---|---|
+| Persistence | 3.229 | 4.540 | 5.328 | 5.959 |
+| Smart persistence | 3.273 (-0.01) | 4.419 (+0.03) | 4.963 (+0.07) | 5.298 (+0.11) |
+| Seasonal naive | 6.929 (-1.15) | 6.934 (-0.53) | 6.931 (-0.30) | 6.924 (-0.16) |
+| LightGBM | 3.019 (+0.07) | 4.046 (+0.11) | 4.521 (+0.15) | 4.915 (+0.18) |
+| LSTM | 3.032 (+0.06) | 4.083 (+0.10) | 4.603 (+0.14) | 4.988 (+0.16) |
+
+**Rolling, all days** (n = 5017 daylight steps per horizon)
+
+| Model | all 15 min | all 30 min | all 45 min | all 60 min |
+|---|---|---|---|---|
+| Persistence | 2.894 | 4.145 | 5.040 | 5.850 |
+| Smart persistence | 2.843 (+0.02) | 3.772 (+0.09) | 4.224 (+0.16) | 4.527 (+0.23) |
+| Seasonal naive | 6.152 (-1.13) | 6.155 (-0.48) | 6.155 (-0.22) | 6.152 (-0.05) |
+| LightGBM | 2.650 (+0.08) | 3.500 (+0.16) | 3.914 (+0.22) | 4.224 (+0.28) |
+| LSTM | 2.633 (+0.09) | 3.457 (+0.17) | 3.896 (+0.23) | 4.220 (+0.28) |
+
+Seasonal naive is evaluated but not a contender. MAE and nRMSE are in `results/metrics.csv`.
+
+</details>
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    A["Excel sheets<br/>12 month column pairs"] --> B["data.py<br/>fix swapped dates,<br/>drop spikes, align"]
+    B --> C["labeling.py<br/>clear-sky envelope,<br/>clear/cloudy days"]
+    B --> D["features.py<br/>lags, clearness ratio,<br/>calendar terms"]
+    C --> D
+    D --> E["baselines.py<br/>persistence, smart,<br/>seasonal naive"]
+    D --> F["models.py<br/>LightGBM, LSTM,<br/>optional Chronos"]
+    E --> G["evaluation.py<br/>holdout and<br/>rolling origin"]
+    F --> G
+    G --> H["results/metrics.csv<br/>+ plot"]
+```
+
+## Quick start
 
 ```bash
-uv sync                                   # core deps (numpy, pandas, openpyxl, scikit-learn, lightgbm, matplotlib)
-uv run solarcast evaluate                 # baselines + LightGBM (LSTM is skipped unless torch is installed)
-uv run --extra deep solarcast evaluate    # adds the small LSTM (installs torch)
+uv sync                                   # core: numpy, pandas, openpyxl, scikit-learn, lightgbm, matplotlib
+uv run solarcast evaluate                 # baselines + LightGBM (LSTM skipped without torch)
+uv run --extra deep solarcast evaluate    # adds the LSTM (installs torch)
 uv run --extra deep --extra foundation solarcast evaluate --models lightgbm lstm chronos
 uv run pytest && uv run ruff check src tests && uv run ruff format --check src tests
 ```
 
-`evaluate` writes `results/metrics.csv` and `results/rmse_by_horizon.png` and prints the tables.
-Options: `--protocol holdout|rolling|both`, `--data-dir`, `--out-dir`. The whole default run takes
-about two minutes on CPU. Chronos needs to download Hugging Face weights; if that fails it is
-skipped with a warning (it could not be downloaded in the environment used to produce the numbers
-below, so **Chronos was not evaluated**).
+| Option | Meaning |
+|---|---|
+| `--protocol holdout\|rolling\|both` | Evaluation protocol (default both) |
+| `--models lightgbm lstm chronos` | Learned models to include; baselines always run |
+| `--data-dir`, `--out-dir` | Input folder with the two `.xlsx` files, output folder |
 
-### Method
+The full run (baselines, LightGBM, LSTM, both protocols) took about 2 minutes wall time on a
+4-core CPU; LSTM training accounts for most of it. Chronos needs Hugging Face weights; if they
+cannot be downloaded it is skipped with a warning (they could not be downloaded when the numbers
+above were produced, so **Chronos was not evaluated**).
 
-* **Task**: at origin time `t`, using only observations up to `t` (generation, irradiation,
-  calendar terms, and a *causal* clear-sky envelope), forecast generation at `t + h` for
-  h = 15/30/45/60 min. There is no weather forecast, and no future irradiation is used.
-* **Clear/cloudy labels** (`labeling.py`): pvlib was not used because a physical clear-sky model
-  needs the PV system's capacity/tilt/losses to be comparable with metered kWh. Instead the
-  envelope is the 95th percentile, per time-of-day slot, over a 31-day rolling window. The daily
-  clearness index is `sum(generation) / sum(envelope)`; days with index >= 0.8 are `clear`, the
-  rest `cloudy`, days with < 90% of daylight observed are `unknown` (excluded from the regime rows).
-  This gives 199 clear, 160 cloudy, 7 unknown days. The envelope is biased low in the monsoon
-  (June-Sept), so some monsoon "clear" days are relative. Labels use the same-day outcome, so
-  they are for stratified *reporting* only, never a model input.
-* **Models**: `persistence`; `smart_persistence` (persist the clearness ratio and multiply by the
-  causal envelope at the target time); `seasonal_naive` (value one day earlier at the target time);
-  `lightgbm` (one regressor per horizon on lags, rolling statistics, clearness ratio, envelope and
-  time-of-day/day-of-year terms); `lstm` (one 32-unit LSTM over a 4 h window, all four horizons
-  jointly; PyTorch CPU, fixed seed, fixed physical scaling so nothing is fitted on test data).
-* **Splits** (`splits.py`, never shuffled): *holdout* = chronological 60/20/20 by whole days, scored
-  on the final 20% (2019-09-19 to 2019-12-01); models are fitted on targets before the test start
-  (train + validation, the last 15% of the fit days are used for LightGBM early stopping). *Rolling
-  origin* = 4 expanding-window folds of 30 days each (2019-08-04 to 2019-12-01). A gap of 4 steps
-  removes training rows whose target would overlap the test block.
-* **Scoring** (`metrics.py`): RMSE in kWh per 15 minutes on **daylight steps only**, on exactly the
-  same rows for every model; `skill = 1 - RMSE / RMSE_persistence`. Rows are split by the label of
-  the target's day. Rows with a missing target or a missing forecast are dropped, never imputed.
+## Method
 
-## Results (real output of `solarcast evaluate`)
+| Item | Choice |
+|---|---|
+| Task | At origin `t`, using data up to `t` only, forecast generation at `t + h`, h = 15/30/45/60 min. No weather forecast, no future irradiation. |
+| Clear/cloudy | Per time-of-day 95th-percentile envelope over 31 days (pvlib not used: a physical model needs PV system capacity/tilt/losses to match metered kWh). Daily clearness index >= 0.8 is clear, otherwise cloudy; under 90% daylight coverage is unknown. Gives 199 clear, 160 cloudy, 7 unknown days. Labels use the day's own outcome, so they stratify the report and are never model inputs. |
+| Models | Persistence; smart persistence (persist the clearness ratio times the causal envelope); seasonal naive (same time yesterday); LightGBM (one regressor per horizon on lags, rolling stats, clearness ratio, envelope, calendar terms); LSTM (32 units, 4 h window, all horizons jointly, CPU, fixed seed and fixed physical scaling). |
+| Holdout | Chronological 60/20/20 by whole days, scored on the last 20%; fit on targets before the test start; last 15% of fit days used for LightGBM early stopping. |
+| Rolling origin | 4 expanding-window folds of 30 days (2019-08-04 to 2019-12-01). A 4-step gap removes training rows whose target overlaps the test block. |
+| Scoring | RMSE on daylight steps only, identical rows for every model; skill = 1 - RMSE / RMSE_persistence. Missing targets or forecasts are dropped, never imputed. |
 
-Holdout (test = 2019-09-19 to 2019-12-01: 1,927 clear-day and 1,168 cloudy-day daylight steps per
-horizon). RMSE in kWh / 15 min, skill vs persistence in brackets:
+## Data notes
 
-| Regime | Model | 15 min | 30 min | 45 min | 60 min |
-|---|---|---|---|---|---|
-| clear | persistence | 2.271 | 3.446 | 4.534 | 5.644 |
-| clear | smart persistence | 1.968 (+0.13) | 2.443 (+0.29) | 2.672 (+0.41) | 2.920 (+0.48) |
-| clear | seasonal naive | 4.485 (-0.98) | 4.487 (-0.30) | 4.488 (+0.01) | 4.491 (+0.20) |
-| clear | LightGBM | **1.914 (+0.16)** | 2.453 (+0.29) | 2.837 (+0.37) | 2.879 (+0.49) |
-| clear | LSTM | 1.946 (+0.14) | **2.254 (+0.35)** | **2.457 (+0.46)** | **2.721 (+0.52)** |
-| cloudy | persistence | 3.085 | 4.247 | 5.186 | 5.996 |
-| cloudy | smart persistence | 2.999 (+0.03) | 3.911 (+0.08) | 4.519 (+0.13) | 4.943 (+0.18) |
-| cloudy | seasonal naive | 6.919 (-1.24) | 6.924 (-0.63) | 6.932 (-0.34) | 6.922 (-0.15) |
-| cloudy | LightGBM | **2.826 (+0.08)** | **3.677 (+0.13)** | **4.241 (+0.18)** | **4.757 (+0.21)** |
-| cloudy | LSTM | 2.889 (+0.06) | 3.815 (+0.10) | 4.393 (+0.15) | 4.775 (+0.20) |
+| Finding | Detail |
+|---|---|
+| Layout | Each sheet has 12 side-by-side `(Date, value)` column pairs, one per month, 2018-12-01 to 2019-12-01 (35,040 slots at 15 min). |
+| Swapped dates | Excel parsed days 1-12 of each month as `mm/dd` (1 Nov 2019 is stored as 11 Jan 2019); days 13-31 are `dd/mm/yyyy` text. `solarcast.data` swaps them back; no duplicates remain. |
+| Generation spikes | 258 readings (0.75%) are paired `-X, +X` of about 500,000 (a cumulative register leaking in, e.g. 2018-12-01 08:15/08:30). Real values are 0-30.6 kWh per 15 min. The MATLAB `TestIp>50 = 30` hid this. Spikes become NaN. |
+| Missing data | Generation lacks 00:00-05:15 on day 1 of each month (night, filled with 0 only where irradiation confirms darkness) and all of 2019-08-28/29. Raw sheets miss 434 generation and 7 irradiation slots. After cleaning, 1.2% of generation and 1.3% of irradiation are NaN. |
+| Row offset | Generation starts at 05:30, irradiation at 00:15: a 21-row offset, which is why the MATLAB code slices rows `76:459` against `97:480` by hand. Timestamp matching removes it. |
+| Units | Irradiation is labelled Wh/m2 but peaks around 1000-1350, so it behaves like W/m2. |
+| Timestamp convention | Correlation with generation is slightly higher with irradiation one step later (0.957 vs 0.955), suggesting an interval-end label. Not corrected. |
 
-Rolling origin, pooled over 4 folds (more data, so less noisy than the single holdout):
+### How the MATLAB code differs
 
-| Regime | Model | 15 min | 30 min | 45 min | 60 min |
-|---|---|---|---|---|---|
-| clear | persistence | 2.314 | 3.482 | 4.574 | 5.669 |
-| clear | smart persistence | 2.054 (+0.11) | 2.534 (+0.27) | 2.791 (+0.39) | 3.034 (+0.46) |
-| clear | LightGBM | 1.982 (+0.14) | 2.485 (+0.29) | 2.788 (+0.39) | 2.920 (+0.48) |
-| clear | LSTM | **1.901 (+0.18)** | **2.235 (+0.36)** | **2.510 (+0.45)** | **2.707 (+0.52)** |
-| cloudy | persistence | 3.229 | 4.540 | 5.328 | 5.959 |
-| cloudy | smart persistence | 3.273 (-0.01) | 4.419 (+0.03) | 4.963 (+0.07) | 5.298 (+0.11) |
-| cloudy | LightGBM | **3.019 (+0.07)** | **4.046 (+0.11)** | **4.521 (+0.15)** | **4.915 (+0.18)** |
-| cloudy | LSTM | 3.032 (+0.06) | 4.083 (+0.10) | 4.603 (+0.14) | 4.988 (+0.16) |
-
-(Seasonal naive and the "all days" rows, MAE and nRMSE are in `results/metrics.csv`; the plot is
-`results/rmse_by_horizon.png`.)
-
-![RMSE by horizon](results/rmse_by_horizon.png)
-
-### What this says (plainly)
-
-* **The old story does not survive a baseline.** The MATLAB write-up reported an LSTM RMSE with no
-  reference point. Here plain persistence is the number to beat, and the gains over it are modest
-  at short range: 6-18% lower RMSE at 15 minutes (both learned models), growing to roughly 16-52%
-  at 60 minutes (cloudy vs clear days), where persistence degrades fast.
-* **Smart persistence is a strong baseline.** On clear days it matches or nearly matches the
-  learned models at 30-60 min, and the LSTM is ahead of LightGBM by up to ~13% RMSE (holdout, 45 min). A model
-  that merely persists the clearness ratio gets most of the achievable gain. On cloudy days it is
-  clearly worse than the learned models at 15-30 min, and in the rolling evaluation it is slightly
-  *worse* than persistence at 15 min (-0.01).
-* **LightGBM vs LSTM is close to a tie.** LightGBM is a little better on cloudy days (both
-  protocols); the LSTM is better on clear days from 30 min onward. Differences are within roughly 2-13%
-  of RMSE, from a single seed and no significance testing -- do not read an ordering into them.
-* **Cloudy days remain hard**: skill vs persistence never exceeds +0.21 for any model. Seasonal
-  naive is useless (worse than persistence at 15-30 min), as expected for intermittent cloud.
+The network input is `[irradiation(t); generation(t)]` and the target is `generation(t+1)`. In the
+test period it is fed the *measured* irradiation plus its own previous prediction, so it is a
+step-ahead nowcast with future irradiation observed, not a forecast from generation alone.
+Normalisation uses the min/max of the whole series (test part included), days were chosen by eye
+and hard-coded as row ranges (e.g. a 384-row, four-day slice with a 75/25 split), and there was
+no baseline.
 
 ## Limitations
 
-* One site, one year, one split of the calendar: the holdout test is Sep 19 - Dec 1 (post-monsoon),
-  while the training data contains only the first half of the monsoon. Results may not transfer to
-  other seasons; rolling origin is a partial check only.
-* No confidence intervals or multiple seeds; the LSTM is small and untuned, LightGBM lightly tuned
-  (fixed hyperparameters).
-* The clear/cloudy split is a threshold on a data-driven envelope (not a physical clear-sky
-  model), and uses the day's own outcome, so the clear/cloudy rows are diagnostic strata and not a
-  forecastable condition.
-* Irradiation is used only as a lagged *input*; no numerical weather prediction or sky imagery.
-* Irradiation units are ambiguous (see above), and the one-step timestamp offset is not corrected.
-* Chronos (zero-shot) code is included but untested end to end: weights could not be downloaded
-  in the build environment, so no Chronos numbers exist.
-* Evaluation is on daylight steps only; night is trivially zero and would flatter every model.
+| Limitation | Consequence |
+|---|---|
+| One site, one year, one calendar split | Holdout is Sep 19 - Dec 1 (post-monsoon); training saw only the first half of the monsoon. Results may not transfer to other seasons. |
+| Single seed, no confidence intervals | Differences of a few percent between LightGBM and LSTM are not established. The LSTM is small and untuned; LightGBM uses fixed hyperparameters. |
+| Clear/cloudy uses a data-driven envelope | Biased low in the monsoon, and based on the day's own outcome, so the rows are diagnostic strata, not a forecastable condition. |
+| Irradiation is only a lagged input | No numerical weather prediction or sky imagery. |
+| Ambiguous irradiation units and one-step stamp offset | Documented, not corrected. |
+| Chronos untested | Weights could not be downloaded, so no Chronos numbers exist. |
+| Daylight steps only | Night is trivially zero and would flatter every model. |
 
-## How the MATLAB code differs (for the record)
+## License
 
-Reading `matlab/code.m`: the network input is `[irradiation(t); generation(t)]` and the target is
-`generation(t+1)`; during the test period it is fed the *measured* irradiation plus its own previous
-prediction (so it is a step-ahead nowcast with future irradiation observed, not a forecast from
-generation alone). Normalisation uses the min/max of the whole series (including the test part),
-days were chosen by eye and hard-coded as row ranges (e.g. a 384-row, four-day slice with a
-75/25 split), noise was handled with `TestIp>50 = 30`, and there was no baseline. The README below
-is ambiguous about which series is "input" and which is "target"; the code answers it as above.
+MIT, see [LICENSE](LICENSE).
 
 ---
 
