@@ -184,7 +184,7 @@ class LSTMModel:
         from torch import nn
 
         torch.manual_seed(self.seed)
-        torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
+        torch.set_num_threads(max(1, min(2, torch.get_num_threads())))
         x_all = self._inputs(ds)
         n, w = len(x_all), self.window
         hs = list(horizons)
