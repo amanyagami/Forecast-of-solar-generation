@@ -23,3 +23,16 @@ jobs:
         run: uv run --frozen ruff check src/ tests/
       - name: Tests
         run: uv run --frozen pytest -q
+
+  deep:
+    name: tests with torch (LSTM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install with the deep extra
+        run: uv sync --frozen --extra deep
+      - name: Tests (LSTM test must run, not skip)
+        run: uv run --frozen --extra deep pytest -q -rs tests/test_models.py
